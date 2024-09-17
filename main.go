@@ -1,150 +1,304 @@
 package main
 
 import (
-	"bufio"
-	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
+	"io/fs"
 	"log"
-	"net"
+	"math/big"
+	"mime"
+	"net/http"
 	"os"
-	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
+
+	"github.com/hashicorp/hcl"
+	"golang.org/x/net/http2"
 )
 
 const maxWorkers = 10
 
 func main() {
-	listener, err := net.Listen("tcp", ":8080")
+
+	configs, err := loadConfigs("./config")
 	if err != nil {
 		log.Fatal(err)
 	}
+	workers := configs[0].Global.Workers
+	if workers <= 0 {
+		workers = maxWorkers
+	}
 
-	jobs := make(chan net.Conn)
+	jobs := make(chan *Config, workers)
 	var wg sync.WaitGroup
 
-	// Create a context that can be canceled
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Start worker goroutines
-	for i := 0; i < maxWorkers; i++ {
+	for i := 0; i < workers; i++ {
 		wg.Add(1)
-		go worker(ctx, jobs, &wg)
+		go worker(jobs, &wg)
 	}
 
-	// Set up channel to listen for OS interrupt signals
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	for _, config := range configs {
+		jobs <- config
+	}
+	close(jobs)
+	wg.Wait()
+}
 
-	// Handle graceful shutdown in a goroutine
-	go func() {
-		<-stop
-		fmt.Println("\nShutting down server...")
-		listener.Close() // This will cause listener.Accept() to return an error
-		close(jobs)      // Close the jobs channel to signal workers to exit
-		cancel()         // Cancel the context to signal connections to close
-	}()
+func worker(jobs <-chan *Config, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for config := range jobs {
+		startServer(config)
+	}
+}
 
-	// Accept connections in the main goroutine
-	for {
-		conn, err := listener.Accept()
+func startServer(config *Config) {
+
+	if config.Server.Listen == "" {
+		config.Server.Listen = ":80"
+	}
+
+	addr := config.Server.Listen
+	server := &http.Server{
+		Addr: addr,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handleConnection(w, r, config)
+		}),
+	}
+
+	if strings.HasSuffix(addr, ":443") || config.Server.HTTPS {
+		cert, err := generateSelfSignedCert()
 		if err != nil {
-			// Check if the error is due to the listener being closed
-			if opErr, ok := err.(*net.OpError); ok && opErr.Err.Error() == "use of closed network connection" {
-				// Listener has been closed, exit the accept loop
+			log.Printf("Error loading certificate and key for %s: %v", addr, err)
+			return
+		}
+		server.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+		http2.ConfigureServer(server, &http2.Server{})
+		err = server.ListenAndServeTLS("", "")
+		fmt.Println("Server started on", config.Server.Listen)
+		if err != nil && err != http.ErrServerClosed {
+			log.Printf("Error starting server on %s: %v", addr, err)
+		}
+	} else {
+		err := server.ListenAndServe()
+		fmt.Println("Server started on", config.Server.Listen)
+		if err != nil && err != http.ErrServerClosed {
+			log.Printf("Error starting server on %s: %v", addr, err)
+		}
+	}
+	
+}
+
+func handleConnection(writer http.ResponseWriter, request *http.Request, config *Config) {
+	path := request.URL.Path
+	method := request.Method
+	headers := request.Header
+
+	fmt.Printf("Method: %s\nURI: %s\nHeaders: %v\n", method, path, headers)
+
+	var matchedRoute *RouteConfig
+	for _, route := range config.Server.Routes {
+		if strings.HasSuffix(route.Path, "*") {
+			basePath := strings.TrimSuffix(route.Path, "*")
+			fmt.Println("Base path:", basePath)
+			if strings.HasPrefix(path, basePath) {
+				matchedRoute = &route
 				break
 			}
-			log.Println("Error accepting connection:", err)
+		} else if route.Path == path {
+			matchedRoute = &route
+			break
+		}
+	}
+
+	if matchedRoute == nil {
+		http.NotFound(writer, request)
+		return
+	}
+
+	switch matchedRoute.Handler {
+	case "static":
+		serveStaticFile(writer, request, config.Server.Root, path)
+	default:
+		http.Error(writer, "501 Not Implemented", http.StatusNotImplemented)
+	}
+
+}
+
+func serveStaticFile(writer http.ResponseWriter, request *http.Request, root, uri string) {
+	cleanPath := filepath.Clean(uri)
+	fmt.Println("Clean path:", cleanPath)
+	if strings.Contains(cleanPath, "..") || strings.HasPrefix(cleanPath, ".") || strings.Contains(cleanPath, "/.") {
+		http.NotFound(writer, request)
+		return
+	}
+
+	fullPath := filepath.Join(root, cleanPath)
+
+	fmt.Println("Full path:", fullPath)
+
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.NotFound(writer, request)
+		} else {
+			http.Error(writer, "500 Internal Server Error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	if info.IsDir() {
+		indexPath := filepath.Join(fullPath, "index.html")
+		indexInfo, err := os.Stat(indexPath)
+		if err == nil && !indexInfo.IsDir() {
+			serveFile(writer, request, indexPath, indexInfo)
+			return
+		}
+	}
+	serveFile(writer, request, fullPath, info)
+
+}
+
+func serveFile(writer http.ResponseWriter, request *http.Request, path string, fileInfo fs.FileInfo) {
+	file, err := os.Open(path)
+	if err != nil {
+		http.NotFound(writer, request)
+		return
+	}
+	defer file.Close()
+
+	contentType := mime.TypeByExtension(filepath.Ext(path))
+	if contentType == "" {
+		contentType = "text/plain"
+	}
+
+	writer.Header().Set("Content-Type", contentType)
+	http.ServeContent(writer, request, path, fileInfo.ModTime(), file)
+}
+
+type Config struct {
+	Global GlobalConfig `hcl:"global"`
+	Server ServerConfig `hcl:"server"`
+}
+
+type GlobalConfig struct {
+	Workers int `hcl:"workers"`
+}
+
+type ServerConfig struct {
+	Listen     string            `hcl:"listen"`
+	HTTPS      bool              `hcl:"https"`
+	Root       string            `hcl:"root"`
+	Routes     []RouteConfig     `hcl:"routes"`
+	ErrorPages []ErrorPageConfig `hcl:"error_pages"`
+	Middleware []string          `hcl:"middleware"`
+}
+
+type RouteConfig struct {
+	Path       string   `hcl:"path"`
+	Handler    string   `hcl:"handler"`
+	Script     string   `hcl:"script"`
+	Template   string   `hcl:"template"`
+	Middleware []string `hcl:"middleware"`
+}
+
+type ErrorPageConfig struct {
+	StatusCode int    `hcl:"status_code"`
+	Path       string `hcl:"path"`
+}
+
+func loadConfig(filename string) (*Config, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, err
+	}
+
+	var config Config
+	err = hcl.Unmarshal(data, &config)
+	if err != nil {
+		return nil, err
+	}
+	return &config, nil
+}
+
+
+func loadConfigs(path string) ([]*Config, error) {
+	files, err := os.ReadDir(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var configs []*Config
+
+	for _, file := range files {
+		if file.IsDir() || filepath.Ext(file.Name()) != ".hcl" {
 			continue
 		}
-		jobs <- conn
-	}
-
-	// Wait for all workers to finish
-	wg.Wait()
-	fmt.Println("Server gracefully stopped.")
-}
-
-func worker(ctx context.Context, jobs chan net.Conn, wg *sync.WaitGroup) {
-	defer wg.Done()
-	for conn := range jobs {
-		handleConnection(ctx, conn)
-	}
-}
-
-func handleConnection(ctx context.Context, conn net.Conn) {
-	defer conn.Close()
-
-	// Goroutine to set read deadline when context is canceled
-	go func() {
-		<-ctx.Done()
-		conn.SetReadDeadline(time.Now()) // Unblock reads
-	}()
-
-	reader:= bufio.NewReader(conn)
-	requestLine, err := reader.ReadString('\n')
-	if err != nil {
-		log.Println("Error reading request line:", err)
-		return
-	}
-
-	fmt.Println("Received:", requestLine)
-	
-	method, uri, version, ok := parseRequestLine(requestLine)
-	if !ok {
-		log.Println("Invalid request line:", requestLine)
-		return
-	}
-
-	headers, err := parseHeaders(reader)
-	if err != nil {
-		log.Println("Error parsing headers:", err)
-		return
-	}
-
-	fmt.Printf("Method: %s\nURI: %s\nVersion: %s\nHeaders: %v\n", method, uri, version, headers)
-
-	if uri == "/" {
-		sendHttpResponse(conn, 200, "OK", "Hello, World!", headers)
-	} else {
-		sendHttpResponse(conn, 404, "Not Found", "404 Not Found", headers)
-	}
-}
-
-func parseRequestLine(requestLine string) (method, uri, version string, ok bool) {
-	parts:= strings.Split(strings.TrimSpace(requestLine), " ")
-	if len(parts) != 3 {
-		return "", "", "", false
-	}
-	return parts[0], parts[1], parts[2], true
-}
-
-func parseHeaders(reader *bufio.Reader) (map[string]string, error) {
-	headers := make(map[string]string)
-	for {
-		line, err := reader.ReadString('\n')
+		config, err := loadConfig(filepath.Join(path, file.Name()))
 		if err != nil {
 			return nil, err
 		}
-		if line == "\r\n" {
-			break
-		}
-		parts := strings.SplitN(line, ": ", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		headers[parts[0]] = parts[1]
+		configs = append(configs, config)
 	}
-	return headers, nil
-}
 
-func sendHttpResponse(conn net.Conn, statusCode int, statusText string,body string, headers map[string]string) {
-	response := fmt.Sprintf("HTTP/1.1 %d %s\r\n", statusCode, statusText)
-	response += "Content-Type: text/html\r\n"
-	response += fmt.Sprintf("Content-Length: %d\r\n", len(body))
-	response += "\r\n"
-	response += body
-	conn.Write([]byte(response))
+	return configs, nil
+}
+const cacheDir = ".cache"
+
+func generateSelfSignedCert() (tls.Certificate, error) {
+	certFile := filepath.Join(cacheDir, "cert.pem")
+	keyFile := filepath.Join(cacheDir, "key.pem")
+
+	if _, err := os.Stat(certFile); err == nil {
+		if _, err := os.Stat(keyFile); err == nil {
+			return tls.LoadX509KeyPair(certFile, keyFile)
+		}
+	}
+
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	tmpl := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+
+	certDer, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	certPem := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDer})
+	privPem := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
+
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return tls.Certificate{}, err
+	}
+
+	if err := os.WriteFile(certFile, certPem, 0644); err != nil {
+		return tls.Certificate{}, err
+	}
+
+	if err := os.WriteFile(keyFile, privPem, 0644); err != nil {
+		return tls.Certificate{}, err
+	}
+
+	cert, err := tls.X509KeyPair(certPem, privPem)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	return cert, nil
 }
