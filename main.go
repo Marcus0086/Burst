@@ -4,11 +4,11 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -83,26 +83,68 @@ func handleConnection(ctx context.Context, conn net.Conn) {
 		conn.SetReadDeadline(time.Now()) // Unblock reads
 	}()
 
-	scanner := bufio.NewScanner(conn)
-	for scanner.Scan() {
-		line := scanner.Text()
-		fmt.Println("Received:", line)
-		_, err := conn.Write([]byte(line + "\n"))
+	reader:= bufio.NewReader(conn)
+	requestLine, err := reader.ReadString('\n')
+	if err != nil {
+		log.Println("Error reading request line:", err)
+		return
+	}
+
+	fmt.Println("Received:", requestLine)
+	
+	method, uri, version, ok := parseRequestLine(requestLine)
+	if !ok {
+		log.Println("Invalid request line:", requestLine)
+		return
+	}
+
+	headers, err := parseHeaders(reader)
+	if err != nil {
+		log.Println("Error parsing headers:", err)
+		return
+	}
+
+	fmt.Printf("Method: %s\nURI: %s\nVersion: %s\nHeaders: %v\n", method, uri, version, headers)
+
+	if uri == "/" {
+		sendHttpResponse(conn, 200, "OK", "Hello, World!", headers)
+	} else {
+		sendHttpResponse(conn, 404, "Not Found", "404 Not Found", headers)
+	}
+}
+
+func parseRequestLine(requestLine string) (method, uri, version string, ok bool) {
+	parts:= strings.Split(strings.TrimSpace(requestLine), " ")
+	if len(parts) != 3 {
+		return "", "", "", false
+	}
+	return parts[0], parts[1], parts[2], true
+}
+
+func parseHeaders(reader *bufio.Reader) (map[string]string, error) {
+	headers := make(map[string]string)
+	for {
+		line, err := reader.ReadString('\n')
 		if err != nil {
-			fmt.Println("Error writing to connection:", err)
-			return
+			return nil, err
 		}
+		if line == "\r\n" {
+			break
+		}
+		parts := strings.SplitN(line, ": ", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		headers[parts[0]] = parts[1]
 	}
-	if err := scanner.Err(); err != nil {
-		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-			// Read timed out due to read deadline, context was canceled
-			fmt.Println("Connection closed due to server shutdown")
-			return
-		}
-		if err == io.EOF {
-			// Client closed the connection
-			return
-		}
-		fmt.Println("Error reading from connection:", err)
-	}
+	return headers, nil
+}
+
+func sendHttpResponse(conn net.Conn, statusCode int, statusText string,body string, headers map[string]string) {
+	response := fmt.Sprintf("HTTP/1.1 %d %s\r\n", statusCode, statusText)
+	response += "Content-Type: text/html\r\n"
+	response += fmt.Sprintf("Content-Length: %d\r\n", len(body))
+	response += "\r\n"
+	response += body
+	conn.Write([]byte(response))
 }
