@@ -19,8 +19,10 @@ func LoadConfig(filename string) (*models.Config, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return &config, nil
 }
+
 
 func LoadConfigs(path string) ([]*models.Config, error) {
 	files, err := os.ReadDir(path)
@@ -31,7 +33,7 @@ func LoadConfigs(path string) ([]*models.Config, error) {
 	var configs []*models.Config
 
 	for _, file := range files {
-		if file.IsDir() || filepath.Ext(file.Name()) != ".hcl" {
+		if file.IsDir() || filepath.Ext(file.Name()) != ".burst" {
 			continue
 		}
 		config, err := LoadConfig(filepath.Join(path, file.Name()))
@@ -42,4 +44,8 @@ func LoadConfigs(path string) ([]*models.Config, error) {
 	}
 
 	return configs, nil
+}
+
+func LoadRootConfig() (*models.Config, error) {
+	return LoadConfig("Burstfile")
 }
