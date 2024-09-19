@@ -3,12 +3,36 @@ package worker
 import (
 	"Burst/internal/server"
 	"Burst/pkg/models"
+	"context"
 	"sync"
 )
 
-func Worker(jobs <-chan *models.Config, wg *sync.WaitGroup) {
+var (
+	jobs = make(chan *models.Config)
+	jobsOnce sync.Once
+)
+
+func AddJob(config *models.Config) {
+	jobs <- config
+}
+
+func CloseJobs() {	
+	jobsOnce.Do(func() {
+		close(jobs)
+	})
+}
+
+func Worker(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
-	for config := range jobs {
-		server.StartServer(config)
+	for {
+		select {
+		case job, ok := <-jobs:
+			if !ok {
+				return
+			}
+			server.StartServer(ctx, job)
+		case <-ctx.Done():
+			return
+		}
 	}
 }
