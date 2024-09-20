@@ -21,7 +21,7 @@ type ServerConfig struct {
 
 type RouteConfig struct {
 	Path          string                 `hcl:"path"`
-	Handler       string                 `hcl:"handler"`
+	Handler       Handler                `hcl:"handler"`
 	Template      string                 `hcl:"template,optional"`
 	Body          string                 `hcl:"body,optional"`
 	Middleware    []string               `hcl:"middleware,optional"`
@@ -29,6 +29,25 @@ type RouteConfig struct {
 	Target        string                 `hcl:"target,optional"`
 	Targets       []string               `hcl:"targets,optional"`
 	LoadBalancing string                 `hcl:"load_balancing,optional"`
+	ReqHeaders    map[string]interface{} `hcl:"req_headers,optional"`
+	RespHeaders   map[string]interface{} `hcl:"resp_headers,optional"`
+	Redirects     []RedirectConfig       `hcl:"redirects,optional"`
+}
+
+type Handler string
+
+const (
+	StaticHandler Handler = "static"
+	StaticContentHandler Handler = "static_content"
+	DynamicHandler Handler = "dynamic"
+	ReverseProxyHandler Handler = "reverse_proxy"
+)
+
+type RedirectConfig struct {
+	From    string `hcl:"from"`
+	To      string `hcl:"to"`
+	Status  int    `hcl:"status"`
+	Message string `hcl:"message"`
 }
 
 type ErrorPageConfig struct {
