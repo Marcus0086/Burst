@@ -4,7 +4,9 @@ import (
 	"Burst/internal/server"
 	"Burst/pkg/models"
 	"context"
+	"log"
 	"sync"
+	"time"
 )
 
 var (
@@ -33,6 +35,10 @@ func Worker(ctx context.Context, wg *sync.WaitGroup) {
 			server.StartServer(ctx, job)
 		case <-ctx.Done():
 			return
+		case <-time.After(time.Second * 5):
+			log.Println("Worker still running")
+			return
 		}
+
 	}
 }

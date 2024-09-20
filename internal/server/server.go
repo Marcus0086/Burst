@@ -56,8 +56,8 @@ func StartServer(ctx context.Context, config *models.Config) {
 				errChan <- err
 
 			}
-			close(errChan)
 		}
+		close(errChan)
 	}()
 	fmt.Println("Server started on", config.Server.Listen)
 	select {
