@@ -71,7 +71,7 @@ server {
     listen = ":80"
     routes = [
         {
-            path "/data"
+            path = "/data"
             handler = "dynamic"
             template = "data.html"
             data = {
