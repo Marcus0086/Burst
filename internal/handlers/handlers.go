@@ -5,17 +5,17 @@ import (
 	"net/http"
 	"strings"
 
-	configTypes "Burst/pkg/models"
+	"Burst/pkg/models"
 )
 
-func HandleConnection(writer http.ResponseWriter, request *http.Request, config *configTypes.Config) {
+func HandleConnection(writer http.ResponseWriter, request *http.Request, config *models.Config) {
 	path := request.URL.Path
 	method := request.Method
 	headers := request.Header
 
 	fmt.Printf("Method: %s\nURI: %s\nHeaders: %v\n", method, path, headers)
 
-	var matchedRoute *configTypes.RouteConfig
+	var matchedRoute *models.RouteConfig
 	for _, route := range config.Server.Routes {
 		if strings.HasSuffix(route.Path, "*") {
 			basePath := strings.TrimSuffix(route.Path, "*")
@@ -36,13 +36,13 @@ func HandleConnection(writer http.ResponseWriter, request *http.Request, config 
 	}
 
 	switch matchedRoute.Handler {
-	case "static":
+	case models.StaticHandler:
 		serveStaticFile(writer, request, config.Server.Root, path)
-	case "static_content":
+	case models.StaticContentHandler:
 		serveStaticContent(writer, matchedRoute.Body)
-	case "dynamic":
+	case models.DynamicHandler:
 		renderTemplate(writer, request, config.Server.Root, matchedRoute)
-	case "reverse_proxy":
+	case models.ReverseProxyHandler:
 		proxyHandler(writer, request, matchedRoute)
 	default:
 		http.Error(writer, "501 Not Implemented", http.StatusNotImplemented)
