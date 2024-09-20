@@ -3,5 +3,5 @@ package models
 import "net/url"
 
 type LoadBalancer interface {
-	NextTarget() *url.URL
+	NextTarget() (*url.URL, error)
 }
