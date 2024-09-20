@@ -12,6 +12,7 @@ import (
 )
 
 func proxyHandler(writer http.ResponseWriter, request *http.Request, route *models.RouteConfig) {
+	redirectHandler(writer, request, route)
 	utils.InitLoadBalancer(route)
 	lb := utils.GetLoadBalancer(route)
 	maxAttemps := len(lb.Backends()) * 2
@@ -27,51 +28,85 @@ func proxyHandler(writer http.ResponseWriter, request *http.Request, route *mode
 		targetURL := backend.URL
 		fmt.Println("Target URL is:", targetURL)
 		proxy := httputil.NewSingleHostReverseProxy(targetURL)
-		
-        originalDirector := proxy.Director
+
+		originalDirector := proxy.Director
 		ctx := request.Context()
 
 		proxy.Director = func(req *http.Request) {
-            originalDirector(req)
-            req = req.WithContext(ctx)
+			originalDirector(req)
+			req = req.WithContext(ctx)
 
-            basePath := strings.TrimSuffix(route.Path, "/*")
-            if basePath == "" && route.Path == "/*" {
-                basePath = "/"
-            }
-            basePath = strings.TrimSuffix(basePath, "/")
+			basePath := strings.TrimSuffix(route.Path, "/*")
+			if basePath == "" && route.Path == "/*" {
+				basePath = "/"
+			}
+			basePath = strings.TrimSuffix(basePath, "/")
 
-            // Adjust the request URL path
-            if strings.HasPrefix(req.URL.Path, basePath) {
-                req.URL.Path = strings.TrimPrefix(req.URL.Path, basePath)
-                if req.URL.Path == "" || !strings.HasPrefix(req.URL.Path, "/") {
-                    req.URL.Path = "/" + req.URL.Path
-                }
-            }
+			// Adjust the request URL path
+			if strings.HasPrefix(req.URL.Path, basePath) {
+				req.URL.Path = strings.TrimPrefix(req.URL.Path, basePath)
+				if req.URL.Path == "" || !strings.HasPrefix(req.URL.Path, "/") {
+					req.URL.Path = "/" + req.URL.Path
+				}
+			}
 
-            req.URL.RawPath = req.URL.Path
+			req.URL.RawPath = req.URL.Path
 
-            // Prepend the target path if specified
-            if targetURL.Path != "" {
-                req.URL.Path = singleJoiningSlash(targetURL.Path, req.URL.Path)
-                req.URL.RawPath = req.URL.Path
-            }
+			// Prepend the target path if specified
+			if targetURL.Path != "" {
+				req.URL.Path = singleJoiningSlash(targetURL.Path, req.URL.Path)
+				req.URL.RawPath = req.URL.Path
+			}
 
-            // Set headers
-            req.Header.Set("X-Forwarded-For", request.RemoteAddr)
-            req.Header.Set("X-Forwarded-Host", request.Host)
-            req.Header.Set("X-Forwarded-Proto", request.URL.Scheme)
-        }
+			// Set headers
+			req.Header.Set("X-Forwarded-For", request.RemoteAddr)
+			req.Header.Set("X-Forwarded-Host", request.Host)
+			req.Header.Set("X-Forwarded-Proto", request.URL.Scheme)
+
+			for header, value := range route.ReqHeaders {
+				switch v := value.(type) {
+				case string:
+					if req.Header.Get(header) != v {
+						req.Header.Set(header, v)
+					}
+				case bool:
+					if !v {
+						req.Header.Del(header)
+					}
+				}
+			}
+		}
 
 		proxy.ModifyResponse = func(resp *http.Response) error {
 			// Remove sensitive headers
-			resp.Header.Set("Server", "Burst")
+			for header, value := range route.RespHeaders {
+				switch v := value.(type) {
+				case string:
+					if resp.Header.Get(header) != v {
+						resp.Header.Set(header, v)
+					}
+				case bool:
+					if !v {
+						resp.Header.Del(header)
+					}
+				}
+			}
+			if value, exists := route.RespHeaders["Server"]; exists {
+				if v, ok := value.(bool); ok && !v {
+					// If Server is set to false in config, remove it
+					resp.Header.Del("Server")
+				}
+			} else {
+				// Default behavior: set the Server header to "Burst"
+				resp.Header.Set("Server", "Burst")
+			}
 			return nil
 		}
 
 		proxy.Transport = &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		}
+
 		var proxyError error
 		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Printf("Proxy error: %v", err)
