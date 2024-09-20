@@ -4,8 +4,6 @@ import (
 	"Burst/pkg/models"
 	"fmt"
 	"net/url"
-	"sync"
-	"time"
 )
 
 type LoadBalancer interface {
@@ -48,23 +46,6 @@ func CreateLoadBalancer(route *models.RouteConfig) (LoadBalancer, error) {
 	}
 }
 
-func roundRobin(targets []*Backend) (LoadBalancer, error) {
-	lb := &RoundRobin{Targets: targets}
-	performInitialHealthCheck(targets)
-	go healthCheck(targets, 10*time.Second)
-	return lb, nil
-}
 
 
-func performInitialHealthCheck(backends []*Backend) {
-    var wg sync.WaitGroup
-    for _, b := range backends {
-        wg.Add(1)
-        go func(b *Backend) {
-            defer wg.Done()
-            alive := isBackendAlive(b.URL)
-            b.SetAlive(alive)
-        }(b)
-    }
-    wg.Wait()
-}
+
