@@ -16,9 +16,12 @@ Burst is a super minimal, easy-to-use server and reverse proxy with modern featu
 1. Build Burst
 
 ```
-git clone https://github.com/kz83629/burst
-cd burst
-go build -o burst
+git clone https://github.com/Marcus0086/Burst
+cd Burst
+# Create a Burstfile in the root of your project.
+# To add more files, create a config directory and add *.burst files in it.
+# Build Burst
+go build -ldflags "-s -w" -o burst
 ```
 
 2. Create a `Burstfile` in your project directory
@@ -68,7 +71,7 @@ server {
     listen = ":80"
     routes = [
         {
-            path = "/data"
+            path "/data"
             handler = "dynamic"
             template = "data.html"
             data = {
