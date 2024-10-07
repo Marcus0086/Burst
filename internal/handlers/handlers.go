@@ -1,14 +1,13 @@
 package handlers
 
 import (
+	"Burst/pkg/models"
 	"fmt"
 	"net/http"
 	"strings"
-
-	"Burst/pkg/models"
 )
 
-func HandleConnection(writer http.ResponseWriter, request *http.Request, config *models.Config) {
+func HandleConnection(writer http.ResponseWriter, request *http.Request, config *models.Config, unifiedConfig *models.ConfigJSON) {
 	path := request.URL.Path
 	method := request.Method
 	headers := request.Header
@@ -44,6 +43,8 @@ func HandleConnection(writer http.ResponseWriter, request *http.Request, config 
 		renderTemplate(writer, request, config.Server.Root, matchedRoute)
 	case models.ReverseProxyHandler:
 		proxyHandler(writer, request, matchedRoute)
+	case models.AdminAPIHandler:
+		AdminAPIHandler(writer, request, unifiedConfig, matchedRoute)
 	default:
 		http.Error(writer, "501 Not Implemented", http.StatusNotImplemented)
 	}
