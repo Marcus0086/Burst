@@ -15,7 +15,7 @@ import (
 	"golang.org/x/net/http2"
 )
 
-func StartServer(ctx context.Context, config *models.Config) {
+func StartServer(ctx context.Context, config *models.Config, unifiedConfig *models.ConfigJSON) {
 
 	if config.Server.Listen == "" {
 		log.Fatal("Listen address is not set")
@@ -25,40 +25,12 @@ func StartServer(ctx context.Context, config *models.Config) {
 	server := &http.Server{
 		Addr: addr,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			handlers.HandleConnection(w, r, config)
+			handlers.HandleConnection(w, r, config, unifiedConfig)
 		}),
 	}
 
 	errChan := make(chan error, 1)
-
-	go func() {
-		var err error
-		if strings.HasSuffix(addr, ":443") || config.Server.HTTPS {
-			cert, err := utils.GenerateSelfSignedCert()
-			if err != nil {
-				log.Printf("Error loading certificate and key for %s: %v", addr, err)
-				errChan <- err
-				return
-			}
-			server.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
-			http2.ConfigureServer(server, &http2.Server{})
-			err = server.ListenAndServeTLS("", "")
-			if err != nil && err != http.ErrServerClosed {
-				log.Printf("Error starting server on %s: %v", addr, err)
-			}
-		} else {
-			err = server.ListenAndServe()
-			if err != nil && err != http.ErrServerClosed {
-				log.Printf("Error starting server on %s: %v", addr, err)
-			}
-			if err != nil && err != http.ErrServerClosed {
-				log.Printf("Error starting server on %s: %v", addr, err)
-				errChan <- err
-
-			}
-		}
-		close(errChan)
-	}()
+	go http2ServerWithTLS(addr, server, errChan, config)
 	fmt.Println("Server started on", config.Server.Listen)
 	select {
 	case <-ctx.Done():
@@ -74,4 +46,35 @@ func StartServer(ctx context.Context, config *models.Config) {
 			log.Printf("Server on %s encountered an error: %v", addr, err)
 		}
 	}
+}
+
+func http2ServerWithTLS(
+	addr string, server *http.Server, errChan chan error, config *models.Config,
+) {
+	var err error
+	if strings.HasSuffix(addr, ":443") || config.Server.HTTPS {
+		cert, err := utils.GenerateSelfSignedCert()
+		if err != nil {
+			log.Printf("Error loading certificate and key for %s: %v", addr, err)
+			errChan <- err
+			return
+		}
+		server.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+		http2.ConfigureServer(server, &http2.Server{})
+		err = server.ListenAndServeTLS("", "")
+		if err != nil && err != http.ErrServerClosed {
+			log.Printf("Error starting server on %s: %v", addr, err)
+		}
+	} else {
+		err = server.ListenAndServe()
+		if err != nil && err != http.ErrServerClosed {
+			log.Printf("Error starting server on %s: %v", addr, err)
+		}
+		if err != nil && err != http.ErrServerClosed {
+			log.Printf("Error starting server on %s: %v", addr, err)
+			errChan <- err
+
+		}
+	}
+	close(errChan)
 }
