@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"Burst/internal/config/middleware"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -12,15 +13,14 @@ import (
 )
 
 func serveStaticContent(writer http.ResponseWriter, body string) {
-
+	middleware.ServerHeaderMiddleware(writer)
 	content := template.Must(template.New("static_content").Parse(body))
 	content.Execute(writer, nil)
-
 }
-
 
 func serveStaticFile(writer http.ResponseWriter, request *http.Request, root, uri string) {
 	// Clean the URI to prevent directory traversal attacks
+	middleware.ServerHeaderMiddleware(writer)
 	cleanPath := filepath.Clean(uri)
 	fmt.Println("Clean path:", cleanPath)
 
@@ -31,7 +31,6 @@ func serveStaticFile(writer http.ResponseWriter, request *http.Request, root, ur
 
 	fullPath := filepath.Join(root, cleanPath)
 	fmt.Println("Full path:", fullPath)
-
 
 	// Check if the path is a directory, if so, serve index.html from that directory
 	info, err := os.Stat(fullPath)
