@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"Burst/internal/config/middleware"
 	"Burst/internal/utils"
 	"Burst/pkg/models"
 	"bytes"
@@ -14,6 +15,7 @@ import (
 )
 
 func renderTemplate(writer http.ResponseWriter, request *http.Request, root string, route *models.RouteConfig) {
+	middleware.ServerHeaderMiddleware(writer)
 	utils.InitDynamicCache()
 	cacheKey := request.URL.Path + "?" + request.URL.RawQuery
 
