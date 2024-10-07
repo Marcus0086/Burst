@@ -10,6 +10,7 @@ Burst is a super minimal, easy-to-use server and reverse proxy with modern featu
 - Modern features for efficient serving
 - Memory and thread-safe
 - Optimized with Go concurrency
+- A Self served Admin API
 
 ## Quick Start
 
@@ -30,7 +31,7 @@ go build -ldflags "-s -w" -o burst
 ## Burstfile Example
 
 ```
-workers = 10    
+workers = 10    // Only set to change parallelism
 
 server {
     root = "./public"
@@ -135,7 +136,7 @@ server {
 }
 ```
 
-### Request Headers
+### Headers
 
 ```
 server {
@@ -149,21 +150,6 @@ server {
                 "Authorization" = "Bearer token"
                 "User-Agent" = false (disable)
             }
-        }
-    ]
-}
-```
-
-### Response Headers
-
-```
-server {
-    listen = ":80"
-    routes = [
-        {
-            path = "/*"
-            handler = "reverse_proxy"
-            target = "http://localhost:3000"
             res_headers = {
                 "Content-Type" = "text/html; charset=utf-8"
                 "Server" = false (disable)
@@ -173,3 +159,20 @@ server {
 }
 ```
 
+# Admin API
+
+```
+golbal {
+    admin_api = true // this will start a server on port :3001
+}
+server {
+    listen = ":80"
+    routes = [
+        {
+            path = "/*"
+            handler = "reverse_proxy"
+            target = "http://localhost:3000"
+        }
+    ]
+}
+```
