@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	jobs = make(chan *models.Config)
+	jobs     = make(chan *models.Config)
 	jobsOnce sync.Once
 )
 
@@ -18,13 +18,13 @@ func AddJob(config *models.Config) {
 	jobs <- config
 }
 
-func CloseJobs() {	
+func CloseJobs() {
 	jobsOnce.Do(func() {
 		close(jobs)
 	})
 }
 
-func Worker(ctx context.Context, wg *sync.WaitGroup) {
+func Worker(ctx context.Context, wg *sync.WaitGroup, unifiedConfig *models.ConfigJSON) {
 	defer wg.Done()
 	for {
 		select {
@@ -32,7 +32,7 @@ func Worker(ctx context.Context, wg *sync.WaitGroup) {
 			if !ok {
 				return
 			}
-			server.StartServer(ctx, job)
+			server.StartServer(ctx, job, unifiedConfig)
 		case <-ctx.Done():
 			return
 		case <-time.After(time.Second * 5):
