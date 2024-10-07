@@ -13,7 +13,6 @@ func LoadConfig(filename string) (*models.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	var config models.Config
 	err = hcl.Unmarshal(data, &config)
 	if err != nil {
@@ -22,7 +21,6 @@ func LoadConfig(filename string) (*models.Config, error) {
 
 	return &config, nil
 }
-
 
 func LoadConfigs(path string) ([]*models.Config, error) {
 	files, err := os.ReadDir(path)
